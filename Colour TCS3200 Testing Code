@@ -1,6 +1,5 @@
 #include "mbed.h"
 
-// 初始化引脚
 DigitalOut tcs_OE(PTC1);
 DigitalOut tcs_s0(PTC2); 
 DigitalOut tcs_s1(PTB3);
