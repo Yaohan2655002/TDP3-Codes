@@ -1,0 +1,71 @@
+#include "mbed.h"
+
+// 初始化引脚
+DigitalOut tcs_OE(PTC1);
+DigitalOut tcs_s0(PTC2); 
+DigitalOut tcs_s1(PTB3);
+DigitalOut tcs_s2(PTB0);
+DigitalOut tcs_s3(PTB1);
+InterruptIn tcs_out(PTD1); 
+Timer timer;
+volatile int pulseCount = 0;
+
+void onPulseRise() {
+    pulseCount++;
+}
+
+void startPulseCounting() {
+    pulseCount = 0;
+    timer.reset();
+    timer.start();
+    tcs_out.rise(&onPulseRise);
+}
+
+int stopPulseCounting() {
+    timer.stop();
+    int count = pulseCount;
+    tcs_out.rise(NULL); 
+    return count;
+}
+
+void setColorScale() {
+    tcs_s0 = 1;
+    tcs_s1 = 1;
+}
+
+void selectColor(int color) {
+    switch(color) {
+        case 0: // Red
+            tcs_s2 = 0;
+            tcs_s3 = 0;
+            break;
+        case 1: // Blue
+            tcs_s2 = 1;
+            tcs_s3 = 1;
+            break;
+    }
+}
+
+void detectColor() {
+    setColorScale();
+    for(int color = 0; color < 2; color++) {
+        selectColor(color);
+        wait_us(100000); 
+        startPulseCounting();
+        wait_us(100000); 
+        int pulseCount = stopPulseCounting();
+        if(color == 0) {
+            printf("Red color pulse count: %d\n", pulseCount);
+        } else {
+            printf("Blue color pulse count: %d\n", pulseCount);
+        }
+    }
+}
+
+int main() {
+    tcs_OE = 0; 
+    while(true) {
+        detectColor();
+        wait_us(500000); 
+    }
+}
