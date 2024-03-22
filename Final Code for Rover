@@ -1,0 +1,389 @@
+#include "mbed.h"
+#include "platform/mbed_thread.h"
+
+// Declare PWM Outputs
+PwmOut en1(PTC4); // Try PTE21
+PwmOut en2(PTC8); // Figure out which motor this is
+
+// Define AnalogIn objects for each line sensor
+AnalogIn sensor1(PTB0);
+AnalogIn sensor2(PTB1);
+AnalogIn sensor3(PTB2);
+AnalogIn sensor4(PTB3);
+AnalogIn sensor5(PTC2);
+
+// Define digital outputs for motor control
+DigitalOut in1(PTD1);
+DigitalOut in2(PTD3);
+DigitalOut in3(PTD0);
+DigitalOut in4(PTD2);
+
+// Define digital outputs for colour sensor configuration
+DigitalOut tcs_OE(PTA5); // pin 2
+DigitalOut tcs_s0(PTA4); // pin 1
+DigitalOut tcs_s1(PTA12); // pin 3
+DigitalOut tcs_s2(PTC6); // pin 4
+DigitalOut tcs_s3(PTC5); // pin 5
+
+// Interrupt inputs for counting colour sensor pulses 
+InterruptIn pulseInputR(PTD5); // For counting pulses from left colour sensor
+InterruptIn pulseInputL(PTA13); // For counting pulses from right colour sensor
+
+// Digital output for solenoid
+DigitalOut solenoid(PTA2);
+
+// Turn on the solenoid to pick up the disk
+void activateSolenoid() {
+    solenoid = 1;
+}
+
+// Turn off the solenoid to drop the disk
+void deactivateSolenoid() {
+    solenoid = 0;
+}
+
+// Set the states for what the colour sensor is searching for based on whether it is carryin a disk or not
+enum colourTarget {
+    lookingForDisks, // Not carrying a disk, looking for a pickup point
+    lookingForRed, // Carrying a red disk, looking for a red drop-off point
+    lookingForBlue // Carrying a blue disk, looking for a blue drop-off point
+};
+
+// Declare a variable to store the current colour sensor target
+colourTarget currentTarget;
+
+// Pulse counter variables
+volatile int pulseCountL = 0; // Pulse counter for left sensor
+volatile int pulseCountR = 0; // Pulse counter for right sensor
+
+Timer timer;
+float measurementPeriod = 1; // Colour sensor measurement period (ms)
+
+// Interrupt service routines to count pulses
+void onPulseRiseL() {
+    pulseCountL++;
+}
+
+void onPulseRiseR() {
+    pulseCountR++;
+}
+
+// Start counting pulses for colour detection
+void startPulseCounting() {
+    pulseCountL = 0; // Reset left pulse counter
+    pulseCountR = 0; // Reset right pulse counter
+    timer.reset(); // Reset the counter
+    timer.start(); // Restart the counter
+    pulseInputL.rise(&onPulseRiseL); // Attach ISR for left sensor
+    pulseInputR.rise(&onPulseRiseR); // Attach ISR for right sensor
+}
+
+// Stio counting pulses
+void stopPulseCounting() {
+    timer.stop();
+    // Detach the ISRs
+    pulseInputL.rise(NULL);
+    pulseInputR.rise(NULL);
+}
+
+void setColorScale() {
+    tcs_s0 = 1;
+    tcs_s1 = 1;
+}
+
+void detectRed() {
+    tcs_s2 = 0;
+    tcs_s3 = 0;
+}
+
+void detectBlue() {
+    tcs_s2 = 0;
+    tcs_s3 = 1;
+}
+
+// Declare a struct for pulse counts for each colour on each sensor
+struct pulseCounts {
+    int leftBlue;
+    int leftRed;
+    int rightBlue;
+    int rightRed;
+};
+
+// Read values from each colour sensor
+pulseCounts detectColours() {
+    pulseCounts counts;
+
+    detectBlue();
+    startPulseCounting();
+    thread_sleep_for(measurementPeriod);
+    stopPulseCounting();
+    counts.leftBlue = pulseCountL;
+    counts.rightBlue = pulseCountR;
+
+    detectRed();
+    startPulseCounting();
+    thread_sleep_for(measurementPeriod);
+    stopPulseCounting();
+    counts.leftRed = pulseCountL;
+    counts.rightRed = pulseCountR;
+
+    return counts;
+}
+
+// Enumeration for each colour
+enum Colours {
+    red, blue, none
+};
+
+// Figure out what colour is being detected (if any) and return that colour
+Colours assignColour(int redPulse, int bluePulse, int redLow, int redHigh, int blueLow, int blueHigh) {
+    if(redPulse > redLow && redPulse < redHigh) {
+        return red;
+    }
+    else if(bluePulse > blueLow && bluePulse < blueHigh) {
+        return blue;
+    }
+    else {
+        return none;
+    }
+}
+
+// Declare variables for colour sensor thresholds
+int redLow, redHigh, blueLow, blueHigh;
+
+// Delcare a variable for pulse counting
+pulseCounts counts;
+
+// Declare an enumaration for clearly storing the rover's previous state
+enum States {
+    forward_straight,
+    left_slight,
+    right_slight,
+    left_hard,
+    right_hard,
+    none1 // initial value
+};
+
+// Declare a variable for storing the previous state
+States previousState;
+
+// Declare thresholds for line detection
+int low_threshold;
+int high_threshold;
+
+// Declare base speed
+float base_speed;
+
+// Declare slight turn speed
+float slight_turn_speed;
+
+// Declare hard turn speed
+float hard_turn_speed;
+
+// Declare sensor variables
+int vL, vLM, vRM, vR;
+
+void straight_forward(float base_speed) {
+    en1 = base_speed;
+    en2 = base_speed;
+    previousState = forward_straight;
+}
+
+void slight_left_turn(float slight_turn_speed) {
+    // Stop rover briefly
+    en1 = 0; // Right motor on
+    en2 = 0; // Left motor off
+    in1 = 1;
+    in2 = 0;
+    in3 = 0;
+    in4 = 1;
+    thread_sleep_for(50);
+    en1 = slight_turn_speed;
+    en2 = slight_turn_speed;
+    previousState = left_slight;
+}
+
+void slight_right_turn(float slight_turn_speed) {
+    // Stop rover briefly
+    en1 = 0; // Right motor off
+    en2 = 0; // Left motor off
+    in1 = 0;
+    in2 = 1;
+    in3 = 1;
+    in4 = 0;
+    thread_sleep_for(50);
+    en1 = slight_turn_speed;
+    en2 = slight_turn_speed;
+    previousState = right_slight;
+}
+
+void hard_left_turn(float hard_turn_speed) {
+    // Stop rover briefly
+    en1 = 0; // Right motor on
+    en2 = 0; // Left motor off
+    in1 = 1;
+    in2 = 0;
+    in3 = 0;
+    in4 = 1;
+    thread_sleep_for(50);
+    en1 = hard_turn_speed;
+    en2 = hard_turn_speed;
+    previousState = left_hard;
+}
+
+void hard_right_turn(float hard_turn_speed) {
+    // Stop rover briefly
+    en1 = 0; // Right motor off
+    en2 = 0; // Left motor off
+    in1 = 0;
+    in2 = 1;
+    in3 = 1;
+    in4 = 0;
+    thread_sleep_for(50);
+    en1 = hard_turn_speed;
+    en2 = hard_turn_speed;
+    previousState = right_hard;
+}
+
+int main() {
+    // Initialise colour thresholds
+    redLow = 0;
+    redHigh = 0;
+    blueLow = 0;
+    blueHigh = 0;
+    // Initialise the current colour sensor target state
+    currentTarget = lookingForDisks;
+
+    // Initialise the rover to be moving forward
+    in1 = 1;
+    in2 = 0;
+    in3 = 1;
+    in4 = 0;
+    // Initialise the motors to be stationary
+    en1 = 0;
+    en2 = 0;
+    // Set thresholds for line detection
+    low_threshold = 600;
+    high_threshold = 900;
+
+    // Set base speed
+    base_speed = 0.3;
+    // Set slight turn speed
+    slight_turn_speed = 0.3;
+    // Set hard turn speed
+    hard_turn_speed = 0.3;
+
+    // Initialise sensor readings
+    vL = 0;
+    vLM = 0;
+    vRM = 0;
+    vR = 0;
+
+    // Initialise previous state
+    previousState = none1;
+    while(true) {
+        // Read colour sensors here
+        counts = detectColours();
+        // Figure out if a colour is being detected by either sensor, and assign it to a sensor if so
+        Colours leftCS = assignColour(counts.leftRed, counts.leftBlue, redLow, redHigh, blueLow, blueHigh);
+        Colours rightCS = assignColour(counts.rightRed, counts.rightBlue, redLow, redHigh, blueLow, blueHigh);
+        // Colour sensor logic
+        switch(currentTarget) {
+            case lookingForDisks:
+                // Only one sensor should be detecting red!
+                if((leftCS == red && rightCS != red) || (leftCS != red && rightCS == red)) {
+                    // Pick up the disk
+                    activateSolenoid();
+                    // Update colour sensor target to look for red drop-off points
+                    currentTarget = lookingForRed;
+                }
+                // Only one sensor should be detecting blue!
+                else if((leftCS == blue && rightCS != blue) || (leftCS != blue && rightCS == blue)) {
+                    // Pick up the disk
+                    activateSolenoid();
+                    // Update colour sensor target to look for blue drop-offs
+                    currentTarget = lookingForBlue;
+                }
+                break;
+            case lookingForRed:
+                // Both sensors should detect red
+                if(leftCS == red && rightCS == red) {
+                    // Drop the disk
+                    deactivateSolenoid();
+                    // Update colour sensor target to search for pick-up points
+                    currentTarget = lookingForDisks;
+                }
+                break;
+            case lookingForBlue:
+                // Both sensors should detect blue
+                if(leftCS == blue && rightCS == blue) {
+                    // Drop the disk
+                    deactivateSolenoid();
+                    // Update colour sensor target to search for pick-up points
+                    currentTarget = lookingForDisks;
+                }
+        }
+        // Read voltage from each sensor and convert to a value between 1 and 1000
+        // Neglect middle sensor for more simple algorithm
+        vL = static_cast<int>(sensor1.read() * 1000);
+        vLM = static_cast<int>(sensor2.read() * 1000);
+        vRM = static_cast<int>(sensor4.read() * 1000);
+        vR = static_cast<int>(sensor5.read() * 1000);
+
+        printf("Sensor1: %d Sensor 2: %d Sensor 4: %d Sensor 5: %d\n", vL, vLM, vRM, vR);
+
+        // Condition for moving straight foward (1111)
+        if(vL >= high_threshold && vLM >= high_threshold && vRM >= high_threshold && vR >= high_threshold) {
+            straight_forward(base_speed);
+        }
+        // Other conditions in order of likelihood
+        // 1101
+        else if(vL >= high_threshold && vLM >= high_threshold && vRM <= low_threshold && vR >= high_threshold) {
+            slight_right_turn(slight_turn_speed);
+        }
+        // 1011
+        else if(vL >= high_threshold && vLM <= low_threshold && vRM >= high_threshold && vR >= high_threshold) {
+            slight_left_turn(slight_turn_speed);
+        }
+        // 1110
+        else if(vL >= high_threshold && vLM >= high_threshold && vRM >= high_threshold && vR <= low_threshold) {
+            hard_right_turn(hard_turn_speed);
+        }
+        // 0111
+        else if(vL <= low_threshold && vLM >= high_threshold && vRM >= high_threshold && vR >= high_threshold) {
+            hard_left_turn(hard_turn_speed);
+        }
+        // 1100
+        else if(vL >= high_threshold && vLM >= high_threshold && vRM <= low_threshold && vR <= low_threshold) {
+            hard_right_turn(hard_turn_speed);
+        }
+        // 0011
+        else if(vL <= low_threshold && vLM <= low_threshold && vRM >= high_threshold && vR >= high_threshold) {
+            hard_left_turn(hard_turn_speed);
+        }
+        // If no conditions are matched, re-execute the previous function
+        else {
+            switch(previousState) {
+                case forward_straight:
+                    straight_forward(base_speed);
+                    break;
+                case left_slight:
+                    slight_left_turn(slight_turn_speed);
+                    break;
+                case right_slight:
+                    slight_right_turn(slight_turn_speed);
+                    break;
+                case left_hard:
+                    hard_left_turn(hard_turn_speed);
+                    break;
+                case right_hard:
+                    hard_right_turn(hard_turn_speed);
+                    break;
+                default:
+                    straight_forward(base_speed);
+                    break;
+            }
+        }
+        thread_sleep_for(10);
+    }
+}
