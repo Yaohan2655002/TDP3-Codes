@@ -1,0 +1,26 @@
+#include "mbed.h"
+
+// Define AnalogIn objects for each sensor
+AnalogIn sensor1(PTB0);
+AnalogIn sensor2(PTB1);
+AnalogIn sensor3(PTB2);
+AnalogIn sensor4(PTB3);
+AnalogIn sensor5(PTC2);
+
+int main() {
+   while (true) {
+       // Read voltage from each sensor and convert to millivolts
+       int voltageMillivolts1 = static_cast<int>(sensor1.read() * 1000);
+       int voltageMillivolts2 = static_cast<int>(sensor2.read() * 1000);
+       int voltageMillivolts3 = static_cast<int>(sensor3.read() * 1000);
+       int voltageMillivolts4 = static_cast<int>(sensor4.read() * 1000);
+       int voltageMillivolts5 = static_cast<int>(sensor5.read() * 1000);
+
+       // Print the voltage levels for each sensor
+       printf("Sensor 1: %d mV, Sensor 2: %d mV, Sensor 3: %d mV, Sensor 4: %d mV, Sensor 5: %d mV\n",
+              voltageMillivolts1, voltageMillivolts2, voltageMillivolts3, voltageMillivolts4, voltageMillivolts5);
+
+       // Add a delay to limit the rate of reading and printing
+       ThisThread::sleep_for(10ms);
+   }
+}
