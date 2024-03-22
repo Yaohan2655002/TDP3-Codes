@@ -1,0 +1,103 @@
+/* mbed Microcontroller Library
+ 
+Copyright (c) 2019 ARM Limited
+SPDX-License-Identifier: Apache-2.0
+*/
+
+#include "mbed.h"
+#include "platform/mbed_thread.h"
+
+
+// Blinking rate in milliseconds
+
+PwmOut en1(PTC4);
+PwmOut en2(PTE21);
+
+int main()
+{
+    // Initialise the digital pin LED1 as an output
+    DigitalOut in1(PTD1);
+    DigitalOut in2(PTD3);
+    DigitalOut in3(PTD0);
+    DigitalOut in4(PTD2);
+    en1.period(0.01f);
+    en1=0.0f;
+
+
+while (true) 
+{
+    // to move it forward
+    in1=1;
+    in2=0;
+    in3=1;
+    in4=0;
+
+        for (float val = 0.0f; val<30.0f; val+=0.05f)
+        {
+            en1=val;
+            en2=val;
+            wait(0.005f);
+        }
+        for (float val = 30.0f; val>0.0f; val-=0.05f)
+        {
+            en1=val;
+            en2=val;
+            wait(0.005f);
+        }
+
+// TO MOVE IT BACKWARDS
+    in1=0;
+    in2=1;
+    in3=0;
+    in4=1;
+
+        for (float val = 0.0f; val<30.0f; val+=0.05f)
+        {
+            en1=val;
+            en2=val;
+            wait(0.005f);
+        }
+        for (float val = 30.0f; val>0.0f; val-=0.05f)
+        {
+            en1=val;
+            en2=val;
+            wait(0.005f);
+        }
+// TO MOVE LEFT
+    in1=1;
+    in2=0;
+    in3=0;
+    in4=1;
+
+        for (float val = 0.0f; val<30.0f; val+=0.05f)
+        {
+            en1=val;
+            en2=val;
+            wait(0.005f);
+        }
+        for (float val = 30.0f; val>0.0f; val-=0.05f)
+        {
+            en1=val;
+            en2=val;
+            wait(0.005f);
+        }
+
+    in1=1;
+    in2=0;
+    in3=0;
+    in4=1;
+
+        for (float val = 0.0f; val<30.0f; val+=0.05f)
+        {
+            en1=val;
+            en2=val;
+            wait(0.005f);
+        }
+        for (float val = 30.0f; val>0.0f; val-=0.05f)
+        {
+            en1=val;
+            en2=val;
+            wait(0.005f);
+        }
+    }
+} 
