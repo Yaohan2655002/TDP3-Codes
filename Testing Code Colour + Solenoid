@@ -1,0 +1,143 @@
+#include "mbed.h"
+
+// Initialize pins for the color sensors
+DigitalOut sensor1_s0(PTC2); 
+DigitalOut sensor1_s1(PTB3);
+DigitalOut sensor1_s2(PTB0);
+DigitalOut sensor1_s3(PTB1);
+InterruptIn sensor1_out(PTD1); // Output frequency from TCS3200
+
+DigitalOut sensor2_s0(PTC12);
+DigitalOut sensor2_s1(PTC13);
+DigitalOut sensor2_s2(PTC16);
+DigitalOut sensor2_s3(PTC17);
+InterruptIn sensor2_out(PTD2); // Output frequency from second TCS3200
+
+DigitalOut solenoid(PTD3); // To control the solenoid
+Timer timer;
+Serial pc(USBTX, USBRX); // For debugging
+
+volatile int pulseCount1 = 0;
+volatile int pulseCount2 = 0;
+
+// Define a state for whether we're searching or carrying a metal disc
+enum State {
+    SEARCHING,  // Searching for a pickup point
+    CARRYING    // Carrying a metal disc to a drop-off point
+};
+
+// Define color types we're interested in
+enum Color {
+    NONE,
+    RED,
+    BLUE
+};
+
+
+const int redThreshold = 2500; // Pulse count threshold for red
+const int blueThreshold = 1600; // Pulse count threshold for blue
+
+State currentState = SEARCHING;
+Color carriedColor = NONE; // Start with no color
+
+void incrementPulseCount1() {
+    pulseCount1++;
+}
+
+void incrementPulseCount2() {
+    pulseCount2++;
+}
+
+// This function sets the scaling factor for frequency output
+void setColorScale(DigitalOut& s0, DigitalOut& s1) {
+    s0 = 1;
+    s1 = 0; // Set scale to 20%
+}
+
+// This function selects the filter color on the TCS3200 sensor
+void selectFilterColor(DigitalOut& s2, DigitalOut& s3, Color color) {
+    if(color == RED) {
+        s2 = 0;
+        s3 = 0; // Red filter
+    } else if(color == BLUE) {
+        s2 = 0;
+        s3 = 1; // Blue filter
+    }
+}
+
+// This function starts the pulse counting for a particular sensor
+void startPulseCounting(InterruptIn& sensorOut, void (*riseHandler)()) {
+    pulseCount1 = 0; // Reset pulse count
+    timer.reset(); // Reset and start the timer
+    timer.start();
+    sensorOut.rise(riseHandler); // Set the rise handler
+}
+
+// This function stops the pulse counting and calculates the pulse count
+int stopPulseCounting(InterruptIn& sensorOut) {
+    timer.stop(); // Stop the timer
+    int count = pulseCount1; // Read the pulse count
+    sensorOut.rise(NULL); // Disable the interrupt
+    pulseCount1 = 0; // Reset the pulse count for the next round
+    return count;
+}
+
+// The main logic for detecting the color
+Color detectColor(InterruptIn& sensorOut, DigitalOut& s0, DigitalOut& s1, DigitalOut& s2, DigitalOut& s3, void (*riseHandler)(), Color testColor) {
+    startPulseCounting(sensorOut, riseHandler);
+    wait_ms(100); // Wait for 100ms to collect pulses
+    int pulseCount = stopPulseCounting(sensorOut);
+    
+    if(testColor == RED && pulseCount >= redThreshold) {
+        return RED;
+    } else if(testColor == BLUE && pulseCount <= blueThreshold) {
+        return BLUE;
+    }
+    return NONE;
+}
+
+// Function to process the color data and control the solenoid
+void processColorData() {
+    Color colorSensor1 = detectColor(sensor1_out, sensor1_s0, sensor1_s1, sensor1_s2, sensor1_s3, incrementPulseCount1, RED);
+    if(colorSensor1 == NONE) {
+        colorSensor1 = detectColor(sensor1_out, sensor1_s0, sensor1_s1, sensor1_s2, sensor1_s3, incrementPulseCount1, BLUE);
+    }
+    Color colorSensor2 = detectColor(sensor2_out, sensor2_s0, sensor2_s1, sensor2_s2, sensor2_s3, incrementPulseCount2, RED);
+    if(colorSensor2 == NONE) {
+        colorSensor2 = detectColor(sensor2_out, sensor2_s0, sensor2_s1, sensor2_s2, sensor2_s3, incrementPulseCount2, BLUE);
+    }
+
+    switch(currentState) {
+        case SEARCHING:
+            if((colorSensor1 != NONE && colorSensor2 == NONE) || 
+               (colorSensor1 == NONE && colorSensor2 != NONE)) {
+                // A single sensor detects a color - assume it's a pickup point
+                carriedColor = (colorSensor1 != NONE) ? colorSensor1 : colorSensor2;
+                solenoid = 1; // Activate the solenoid to pick up a disc
+                currentState = CARRYING; // Change state to carrying
+            }
+            break;
+
+        case CARRYING:
+            if(colorSensor1 == carriedColor && colorSensor2 == carriedColor) {
+                // Both sensors detect the same color - assume it's a drop point
+                solenoid = 0; // Deactivate the solenoid to drop off a disc
+                currentState = SEARCHING; // Change state back to searching
+                carriedColor = NONE; // Reset carried color
+            }
+            // If not at a drop point, keep carrying
+            break;
+    }
+}
+
+int main() {
+    sensor1_s0 = sensor1_s1 = sensor2_s0 = sensor2_s1 = 1; // Initialize sensors
+    sensor1_out.rise(&incrementPulseCount1); // Setup interrupts for pulse counting
+    sensor2_out.rise(&incrementPulseCount2);
+    timer.start(); // Start the timer
+
+    while(true) {
+        processColorData(); // Process the color data
+        wait_ms(100); 
+    }
+}
