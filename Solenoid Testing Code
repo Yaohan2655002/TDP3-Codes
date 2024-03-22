@@ -1,0 +1,19 @@
+#include "mbed.h"
+
+DigitalOut transistorControl(PTA2);  
+
+int main() {
+    while (1) {
+        // Turn on the NPN transistor 
+        transistorControl = 1;
+
+        // Wait for 3 seconds
+        wait_us(3000000);
+
+        // Turn off the NPN transistor 
+        transistorControl = 0;
+
+        // Wait for another 3 seconds
+        wait_us(3000000);
+    }
+}
